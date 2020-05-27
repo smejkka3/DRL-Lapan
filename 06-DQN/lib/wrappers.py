@@ -4,14 +4,16 @@ import gym.spaces
 import numpy as np
 import collections
 
+
 class FireResetEnv(gym.Wrapper):
     def __init__(self, env=None):
+        """For environments where the user need to press FIRE for the game to start."""
         super(FireResetEnv, self).__init__(env)
         assert env.unwrapped.get_action_meanings()[1] == 'FIRE'
         assert len(env.unwrapped.get_action_meanings()) >= 3
 
     def step(self, action):
-        return self.env.step.action()
+        return self.env.step(action)
 
     def reset(self):
         self.env.reset()
@@ -23,11 +25,12 @@ class FireResetEnv(gym.Wrapper):
             self.env.reset()
         return obs
 
+
 class MaxAndSkipEnv(gym.Wrapper):
     def __init__(self, env=None, skip=4):
-        """Return only every 'skip'-th frame"""
+        """Return only every `skip`-th frame"""
         super(MaxAndSkipEnv, self).__init__(env)
-        #most recent raw observations (for max pooling across time steps)
+        # most recent raw observations (for max pooling across time steps)
         self._obs_buffer = collections.deque(maxlen=2)
         self._skip = skip
 
@@ -40,13 +43,21 @@ class MaxAndSkipEnv(gym.Wrapper):
             total_reward += reward
             if done:
                 break
-            max_frame = np.max(np.stack(self._obs_buffer), axis=0)
-            return max_frame, total_reward, done, info
+        max_frame = np.max(np.stack(self._obs_buffer), axis=0)
+        return max_frame, total_reward, done, info
+
+    def reset(self):
+        """Clear past frame buffer and init. to first obs. from inner env."""
+        self._obs_buffer.clear()
+        obs = self.env.reset()
+        self._obs_buffer.append(obs)
+        return obs
+
 
 class ProcessFrame84(gym.ObservationWrapper):
     def __init__(self, env=None):
         super(ProcessFrame84, self).__init__(env)
-        self.observation_space = gym.spaces.Box(low=0, high=255, shape=(84,84,1), dtype=np.uint8)
+        self.observation_space = gym.spaces.Box(low=0, high=255, shape=(84, 84, 1), dtype=np.uint8)
 
     def observation(self, obs):
         return ProcessFrame84.process(obs)
