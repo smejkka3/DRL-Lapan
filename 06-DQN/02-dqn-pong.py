@@ -13,6 +13,8 @@ import torch.optim as optim
 
 from tensorboardX import SummaryWriter
 
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning)
 
 DEFAULT_ENV_NAME = "PongNoFrameskip-v4"
 MEAN_REWARD_BOUND = 19.5
