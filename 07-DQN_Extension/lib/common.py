@@ -64,6 +64,7 @@ HYPERPARAMS = {
     },
 }
 
+
 def unpack_batch(batch):
     states, actions, rewards, dones, last_states = [], [], [], [], []
     for exp in batch:
@@ -73,10 +74,12 @@ def unpack_batch(batch):
         rewards.append(exp.reward)
         dones.append(exp.last_state is None)
         if exp.last_state is None:
-            last_states.append(state)
+            last_states.append(state)       # the result will be masked anyway
         else:
             last_states.append(np.array(exp.last_state, copy=False))
-    return np.array(states, copy=False), np.array(actions), np.array(rewards, dtype=np.float32), np.array(dones, dtype=np.uint8), np.array(last_states, copy=False)
+    return np.array(states, copy=False), np.array(actions), np.array(rewards, dtype=np.float32), \
+           np.array(dones, dtype=np.uint8), np.array(last_states, copy=False)
+
 
 def calc_loss_dqn(batch, net, tgt_net, gamma, device="cpu"):
     states, actions, rewards, dones, next_states = unpack_batch(batch)
@@ -92,19 +95,8 @@ def calc_loss_dqn(batch, net, tgt_net, gamma, device="cpu"):
     next_state_values[done_mask] = 0.0
 
     expected_state_action_values = next_state_values.detach() * gamma + rewards_v
-
     return nn.MSELoss()(state_action_values, expected_state_action_values)
 
-class EpsilonTracker:
-    def __init__(self, epsilon_greedy_selector, params):
-        self.epsilon_greedy_selector = epsilon_greedy_selector
-        self.epsilon_start = params['epsilon_start']
-        self.epsilon_final = params['epsilon_final']
-        self.epsilon_frames = params['epsilon_frames']
-        self.frame(0)
-
-    def frame(self, frame):
-        self.epsilon_greedy_selector.epsilon = max(self.epsilon_final, self.epsilon_start - frame / self.epsilon_frames)
 
 class RewardTracker:
     def __init__(self, writer, stop_reward):
@@ -126,16 +118,68 @@ class RewardTracker:
         self.ts_frame = frame
         self.ts = time.time()
         mean_reward = np.mean(self.total_rewards[-100:])
-        epsilon_str = "" if epsilon is None else ", eps %.2f" %epsilon
-        print("%d: done %d games, mean reward %.3f, speed %.2f f/s%s" % ( frame, len(self.total_rewards), mean_reward, speed, epsilon_str))
-
+        epsilon_str = "" if epsilon is None else ", eps %.2f" % epsilon
+        print("%d: done %d games, mean reward %.3f, speed %.2f f/s%s" % (
+            frame, len(self.total_rewards), mean_reward, speed, epsilon_str
+        ))
         sys.stdout.flush()
         if epsilon is not None:
             self.writer.add_scalar("epsilon", epsilon, frame)
-            self.writer.add_scalar("speed", speed, frame)
-            self.writer.add_scalar("reward_100", mean_reward, frame)
-            self.writer.add_scalar("reward", reward, frame)
-            if mean_reward > self.stop_reward:
-                print("Solved in %d frames!" % frame)
-                return True
-            return False
+        self.writer.add_scalar("speed", speed, frame)
+        self.writer.add_scalar("reward_100", mean_reward, frame)
+        self.writer.add_scalar("reward", reward, frame)
+        if mean_reward > self.stop_reward:
+            print("Solved in %d frames!" % frame)
+            return True
+        return False
+
+
+class EpsilonTracker:
+    def __init__(self, epsilon_greedy_selector, params):
+        self.epsilon_greedy_selector = epsilon_greedy_selector
+        self.epsilon_start = params['epsilon_start']
+        self.epsilon_final = params['epsilon_final']
+        self.epsilon_frames = params['epsilon_frames']
+        self.frame(0)
+
+    def frame(self, frame):
+        self.epsilon_greedy_selector.epsilon = \
+            max(self.epsilon_final, self.epsilon_start - frame / self.epsilon_frames)
+
+
+def distr_projection(next_distr, rewards, dones, Vmin, Vmax, n_atoms, gamma):
+    """
+    Perform distribution projection aka Catergorical Algorithm from the
+    "A Distributional Perspective on RL" paper
+    """
+    batch_size = len(rewards)
+    proj_distr = np.zeros((batch_size, n_atoms), dtype=np.float32)
+    delta_z = (Vmax - Vmin) / (n_atoms - 1)
+    for atom in range(n_atoms):
+        tz_j = np.minimum(Vmax, np.maximum(Vmin, rewards + (Vmin + atom * delta_z) * gamma))
+        b_j = (tz_j - Vmin) / delta_z
+        l = np.floor(b_j).astype(np.int64)
+        u = np.ceil(b_j).astype(np.int64)
+        eq_mask = u == l
+        proj_distr[eq_mask, l[eq_mask]] += next_distr[eq_mask, atom]
+        ne_mask = u != l
+        proj_distr[ne_mask, l[ne_mask]] += next_distr[ne_mask, atom] * (u - b_j)[ne_mask]
+        proj_distr[ne_mask, u[ne_mask]] += next_distr[ne_mask, atom] * (b_j - l)[ne_mask]
+    if dones.any():
+        proj_distr[dones] = 0.0
+        tz_j = np.minimum(Vmax, np.maximum(Vmin, rewards[dones]))
+        b_j = (tz_j - Vmin) / delta_z
+        l = np.floor(b_j).astype(np.int64)
+        u = np.ceil(b_j).astype(np.int64)
+        eq_mask = u == l
+        eq_dones = dones.copy()
+        eq_dones[dones] = eq_mask
+        if eq_dones.any():
+            proj_distr[eq_dones, l[eq_mask]] = 1.0
+        ne_mask = u != l
+        ne_dones = dones.copy()
+        ne_dones[dones] = ne_mask
+        if ne_dones.any():
+            proj_distr[ne_dones, l[ne_mask]] = (u - b_j)[ne_mask]
+            proj_distr[ne_dones, u[ne_mask]] = (b_j - l)[ne_mask]
+    return proj_distr
