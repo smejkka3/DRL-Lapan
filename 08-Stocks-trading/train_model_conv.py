@@ -12,6 +12,11 @@ from lib import environ, data, models, common, validation
 
 from tensorboardX import SummaryWriter
 
+from gym import wrappers
+
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning)
+
 BATCH_SIZE = 32
 BARS_COUNT = 50
 TARGET_NET_SYNC = 1000
