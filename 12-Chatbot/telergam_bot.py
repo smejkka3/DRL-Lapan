@@ -19,7 +19,7 @@ import torch
 # Configuration file with the following contents
 # [telegram]
 # api=API_KEY
-CONFIG_DEFAULT = "~/.config/rl_ch12_bot.ini"
+CONFIG_DEFAULT = "~/.config/rl_Chapter12_bot.ini"
 
 log = logging.getLogger("telegram")
 
